@@ -1,0 +1,240 @@
+---
+title: "Public universities"
+author: "Dmitry Grigorev"
+date: '22 ноября 2021 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(readxl)
+library(GGally)
+library(knitr)
+library(reshape2)
+library(qqplotr)
+library(gridExtra)
+library(DescTools)
+
+library(nortest)
+
+kable_new<-function(data){kable(data, digits = 3, format.args = list(scientific = FALSE)) }
+
+Mode<-function(x, na.rm = TRUE) {
+  if(na.rm){
+    x = x[!is.na(x)]
+  }
+
+  ux <- unique(x)
+  mode<-ux[which.max(tabulate(match(x, ux)))]
+  list("mode" = mode, "modefreq" = sum(x == mode))
+}
+```
+## Читаем данные
+```{r}
+data<-read_xls("PUBLIC_shortname.xls") %>% data.frame()
+kable_new(data[1:5, 1:10])
+```
+## Взглянем на признаки
+```{r}
+names(data)
+```
+## Отберём интересующие признаки
+```{r}
+todrop<-c("FICE", "PPIND", "ROOM", "BOARD", "NUM_FULL", "NUM_AC",   "NUM_AS", "NUM_INS", "NUM_ALL", "NEW10", "NEW25", "MATH_1", "MATH_3", "VERB_1", "VERB_3", "ACT_1", "ACT_3", "IN_STATE", "NEW_STUD", "SAL_AS", "SAL_FULL", "COMP_FUL", "COMP_AC", "COMP_AS", "COMP_ALL", "DONATE", "INSTRUCT", "PH_D", "FULLTIME", "PARTTIME", "BOOK", "ADD_FEE", "APP_REC", "APP_ACC", "PERSONAL", "AVR_ACT")
+
+northeast<-c("ME", "MA", "RI", "CT", "NH", "VT", "NY", "PA", "NJ", "DE", "MD")
+southeast<-c("WV", "VA", "KY", "TN", "NC", "SC", "GA", "AL", "MS", "AS", "LA", "FL")
+midwest<-c("OH", "IN", "MI", "IL", "MO", "WI", "MN", "IA", "KS", "NE", "SD", "ND")
+southwest<-c("TX", "OK", "NM", "AZ")
+west<-c("CO", "WY", "MT", "ID", "WA", "OR", "UT", "NV", "CA", "AK", "HI")
+
+region<-Vectorize(function(name){
+    if(name %in% northeast) {return("Northeast")}
+    else if (name %in% southeast) {return("Southeast")}
+    else if (name %in% midwest) {return("Midwest")}
+    else if (name %in% southwest) {return("Southwest")}
+    else {return("West")}
+})
+
+
+fdata<-data %>% mutate(APP_ACC_r = APP_ACC/APP_REC, REGION = region(STATE)) %>%
+             select(-all_of(todrop)) %>% rename(UNIV = ...1)
+
+kable_new(fdata[1:7,])
+
+summary(fdata)
+modeinfo<-apply(fdata, 2, Mode)
+do.call(cbind, modeinfo)
+```
+
+## Взглянем на pairs-plot
+```{r warning=FALSE, fig.width=10, fig.height=11}
+pairs<-fdata %>% select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)))+
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+typepairs<-fdata %>% select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(ggplot2::aes(colour=fdata$TYPE), 
+                    lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)), 
+                    diag = list(continuous = wrap("densityDiag", alpha=0.5 )))+
+                    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+pairs
+
+typepairs
+```
+#### Признаки с результатами экзаменов сильно коррелируют, отсекаем часть из них
+```{r}
+fdata<-select(fdata, -all_of(c("AVRVERB", "AVRCOMB")))
+```
+
+### В графиках с OUT_STAT-признаком видны три аутлаера. Например, университет Вермонта был дорог из-за плохого финансирования
+```{r}
+fdata %>% filter(OUT_STAT > 14000) %>% select(UNIV, STATE, REGION, OUT_STAT)
+
+fdata <- filter(fdata, OUT_STAT < 14000)
+```
+
+### Что касается классификации университетов, точных данных найти не удалось
+### Взглянем на число индивидов с разбивкой по категоризующим переменным
+```{r}
+fdata %>% group_by(TYPE) %>% summarize(n = n())
+fdata %>% group_by(REGION) %>% summarize(n = n())
+```
+
+### Неоднородность в данных явно прослеживается после разбиения данных во многих признаках, лишь в двух признаках стоит это проверить средствами статистики
+```{r fig.width=10}
+fdata_I<-filter(fdata, TYPE == "I")
+fdata_noIIB<-filter(fdata, TYPE != "IIB")
+
+ggplot(fdata_noIIB, aes(x = SF_RATIO)) + geom_boxplot(aes(fill = TYPE)) + xlab("SF_RATIO") + labs(title = "Boxplots for student/faculty ratio")
+
+
+ggplot(fdata_noIIB, aes(x = GRADUAT)) + geom_boxplot(aes(fill = TYPE)) + xlab("GRADUAT") + labs(title = "Boxplots for graduation rate")
+```
+
+```{r fig.width=11}
+q1<-ggplot(filter(fdata_noIIB, TYPE == "I", !is.na(SF_RATIO)), aes(sample = (SF_RATIO - mean(SF_RATIO))/sd(SF_RATIO) )) + geom_qq() + labs(title = "Normal probability plot for TYPE I 's SF_RATIO ")+geom_abline()
+q2<-ggplot(filter(fdata_noIIB, TYPE == "IIA", !is.na(SF_RATIO)), aes(sample = (SF_RATIO - mean(SF_RATIO))/sd(SF_RATIO) )) + geom_qq() + labs(title = "Normal probability plot for TYPE IIA 's SF_RATIO ")+geom_abline()
+q3<-ggplot(filter(fdata_noIIB, TYPE == "I", !is.na(GRADUAT)), aes(sample = (GRADUAT - mean(GRADUAT))/sd(GRADUAT) )) + geom_qq() + labs(title = "Normal probability plot for TYPE I 's GRADUAT ")+geom_abline()
+q4<-ggplot(filter(fdata_noIIB, TYPE == "IIA", !is.na(GRADUAT)), aes(sample = (GRADUAT - mean(GRADUAT))/sd(GRADUAT) )) + geom_qq() + labs(title = "Normal probability plot for TYPE IIA 's GRADUAT ")+geom_abline()
+
+grid.arrange(q1, q2,q3,q4, nrow = 2)
+
+shapiro.test(filter(fdata_noIIB, TYPE == "I")$SF_RATIO)
+shapiro.test(filter(fdata_noIIB, TYPE == "IIA")$SF_RATIO)
+shapiro.test(filter(fdata_noIIB, TYPE == "I")$GRADUAT)
+shapiro.test(filter(fdata_noIIB, TYPE == "IIA")$GRADUAT)
+```
+
+#### Сравним средние в обоих случаях
+```{r}
+LeveneTest(y = fdata_noIIB$SF_RATIO, group = fdata_noIIB$TYPE, center = "median")
+LeveneTest(y = fdata_noIIB$GRADUAT, group = fdata_noIIB$TYPE, center = "median")
+
+t.test(SF_RATIO ~ TYPE, data = fdata_noIIB)
+t.test(GRADUAT ~ TYPE, data = fdata_noIIB)
+```
+
+#### Можем сравнить различия и по критерию Вилкоксона. Распределения в целом симметричны , потому они сравнивают медианы.
+```{r}
+wilcox.test(SF_RATIO ~ TYPE, data = fdata_noIIB)
+wilcox.test(GRADUAT ~ TYPE, data = fdata_noIIB)
+```
+
+### Итак, неоднородность выявлена. Перевём внимание на собственно университеты (TYPE == I). 
+
+### Здесь распределение переменной TERM_D скошено вправо. Развернув значения этого признака, получаем новый признак --- NTERM_D --- число представителей преподавательского состава без высшего образования. Он уже скошен влево и разумно его логарифмировать. Скошенность R_B_COST тоже требует логарифмирования.
+```{r warning=FALSE, fig.width=10, fig.height=11}
+fdata_I_t <- mutate(fdata_I, TERM_D = log(100 - TERM_D), R_B_COST = log(R_B_COST)) %>% rename(logNTERM_D = TERM_D, logR_B_COST = R_B_COST)
+
+fdata_I_t %>% select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)), upper = list(continuous = wrap("cor", method = "spearman")))+
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### Анализируем аутлаеры далее
+### Аутлаеры по признакам зарплаты
+```{r}
+fdata_I_t %>% filter(SAL_ALL >= 638 | SAL_AC >= 575) %>%select(UNIV, SAL_ALL, SAL_AC)
+```
+
+#### Например, университет Калифорнии признан престижным 
+### по GRADUAT
+```{r}
+fdata_I_t %>% filter(GRADUAT < 13) %>%select(UNIV, GRADUAT)
+```
+
+```{r}
+fdata_I_t <- filter(fdata_I_t, !(APP_ACC_r >= 0.9 | APP_ACC_r <= 0.5 | GRADUAT < 13 | SAL_ALL >= 638 | SAL_AC >= 575))
+```
+### Normal Probability Plots with Shapiro-Wilk test
+```{r}
+for(name in fdata_I_t %>% select(all_of(c("SAL_ALL", "SAL_AC"))) %>% names())
+{
+  mean_ = mean(fdata_I_t[, name], na.rm = TRUE)
+  sd_ = sd(fdata_I_t[, name], na.rm = TRUE)
+  print(ggplot(fdata_I_t, aes_string(sample = name))+ geom_qq() + geom_abline(slope = sd_, intercept = mean_) + labs(title = name))
+  
+  print(shapiro.test(fdata_I_t[, name]))
+}
+```
+### Необходимо сравнить зарплату всех сотрудников в среднем SAL_ALL и зарплату доцентов SAL_AC
+### Paired t-test
+```{r}
+t.test(fdata_I_t$SAL_ALL, fdata_I_t$SAL_AC, paired = TRUE)
+```
+
+### Может быть, картина изменится, если мы разобьём данные университетов по регионам. Взглянем на боксплоты.
+
+```{r fig.width=16, fig.height=10, warning=FALSE}
+q1<-ggplot(fdata_I_t, aes(x = AVRMATH, fill = reorder(REGION, AVRMATH))) + geom_boxplot() + labs(title = "Boxplot for AVRMATH") + scale_fill_discrete(name = "REGION")
+q2<-ggplot(fdata_I_t, aes(x = OUT_STAT, fill = reorder(REGION, OUT_STAT))) + geom_boxplot() + labs(title = "Boxplot for OUT_STAT") + scale_fill_discrete(name = "REGION")
+q3<-ggplot(fdata_I_t, aes(x = logR_B_COST, fill = reorder(REGION, logR_B_COST))) + geom_boxplot() + labs(title = "Boxplot for logR_B_COST") + scale_fill_discrete(name = "REGION")
+q4<-ggplot(fdata_I_t, aes(x = logNTERM_D, fill = reorder(REGION,  logNTERM_D))) + geom_boxplot() + labs(title = "Boxplot for logNTERM_D") + scale_fill_discrete(name = "REGION")
+q5<-ggplot(fdata_I_t, aes(x = SF_RATIO, fill = reorder(REGION,  SF_RATIO))) + geom_boxplot() + labs(title = "Boxplot for SF_RATIO") + scale_fill_discrete(name = "REGION")
+q6<-ggplot(fdata_I_t, aes(x = GRADUAT, fill = reorder(REGION,  GRADUAT))) + geom_boxplot() + labs(title = "Boxplot for GRADUAT") + scale_fill_discrete(name = "REGION")
+q7<-ggplot(fdata_I_t, aes(x = SAL_AC, fill = reorder(REGION,  SAL_AC))) + geom_boxplot() + labs(title = "Boxplot for SAL_AC") + scale_fill_discrete(name = "REGION")
+q8<-ggplot(fdata_I_t, aes(x = SAL_ALL, fill = reorder(REGION,  SAL_ALL))) + geom_boxplot() + labs(title = "Boxplot for SAL_ALL") + scale_fill_discrete(name = "REGION")
+q9<-ggplot(fdata_I_t, aes(x =APP_ACC_r, fill = reorder(REGION,  APP_ACC_r))) + geom_boxplot() + labs(title = "Boxplot for APP_ACC_r") + scale_fill_discrete(name = "REGION")
+grid.arrange(q1,q2,q3,q4,q5,q6,q7,q8,q9, nrow = 3)
+```
+
+#### Как видим, средние в зарплатах разнятся всюду, при этом наблюдений в трёх регионах мало (<30)
+
+### Выберем два региона (конкретно те, для которых наблюдений >30)
+#### Ниже приведены pairs-plots, отличающиеся тем, что в первом перечислены коэф. корр. Пирсона, во втором -- Спирмена.
+```{r fig.width=16, fig.height=10, warning=FALSE}
+fdata_I_t_MS<-fdata_I_t %>% dplyr::select(-all_of(c("TYPE", "STATE", "UNIV"))) %>% filter(REGION %in% c("Midwest", "Southeast"))
+
+ggpairs(fdata_I_t_MS, ggplot2::aes(colour=fdata_I_t_MS$REGION) ,lower = list(continuous = wrap("smooth", size=0.7)), diag = list(continuous = wrap("densityDiag", alpha=0.5 )))+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggpairs(fdata_I_t_MS, ggplot2::aes(colour=fdata_I_t_MS$REGION) ,lower = list(continuous = wrap("smooth", size=0.7)), diag = list(continuous = wrap("densityDiag", alpha=0.5 )), upper = list(continuous = wrap("cor", method = "spearman")))+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+#### При сравнени численных значений коэффициентов существенных различий не найдено. Все существенные корреляции выглядят логичными (с т.з. 'одно влечёт другое' )
+
+### Распределения logNTERM_D выглядят похожими
+```{r}
+fdata_I_t_M<-filter(fdata_I_t_MS, REGION == "Midwest")
+fdata_I_t_Se<-filter(fdata_I_t_MS, REGION == "Southeast")
+
+t.test(logNTERM_D~REGION, data = fdata_I_t_MS)
+
+wilcox.test(logNTERM_D~REGION, data = fdata_I_t_MS)
+
+#ks.test(fdata_I_t_M$logNTERM_D, fdata_I_t_Se$logNTERM_D, exact = FALSE) -- невалидно
+```
+
+```{r}
+library(ppcor)
+
+fdata_I_t_M_noNA<-filter(fdata_I_t_M, !is.na(SAL_ALL) & !is.na(OUT_STAT) & !is.na(logR_B_COST))
+
+pcor(dplyr::select(fdata_I_t_M_noNA, SAL_ALL, OUT_STAT, logR_B_COST))
+```
+
+#### Корреляция между logR_B_COST и SAL_ALL для Среднего  Запада изначально не была значима (0.323), но их частная корреляция при условии OUT_STAT уменьшилась; это лишь демонстрация эффекта от вычета влияния.

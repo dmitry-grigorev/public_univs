@@ -1,0 +1,412 @@
+---
+title: "Public universities"
+author: "Dmitry"
+date: '25 марта 2022 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(readxl)
+library(GGally)
+library(ggrepel)
+library(knitr)
+library(reshape2)
+library(qqplotr)
+library(gridExtra)
+library(DescTools)
+
+library(nortest)
+
+library(lm.beta)
+library(ellipse)
+library(ppcor)
+library(leaps)
+library(olsrr)
+
+kable_new<-function(data){kable(data, digits = 3, format.args = list(scientific = FALSE)) }
+
+summary.beta<-function(model){ summary(lm.beta(model))  }
+```
+
+## Читаем данные
+```{r}
+data<-read_xls("PUBLIC_shortname.xls") %>% data.frame()
+kable_new(data[1:5, 1:10])
+```
+## Взглянем на признаки
+```{r}
+names(data)
+```
+## Отберём интересующие признаки
+```{r}
+todrop<-c("FICE", "PPIND", "ROOM", "BOARD", "NUM_FULL", "NUM_AC",   "NUM_AS", "NUM_INS", "NUM_ALL", "NEW10", "NEW25", "MATH_1", "MATH_3", "VERB_1", "VERB_3", "ACT_1", "ACT_3", "IN_STATE", "NEW_STUD", "SAL_AS", "SAL_FULL", "COMP_FUL", "COMP_AC", "COMP_AS", "COMP_ALL", "DONATE", "INSTRUCT", "PH_D", "FULLTIME", "PARTTIME", "BOOK", "ADD_FEE", "APP_REC", "APP_ACC", "PERSONAL", "AVR_ACT")
+
+northeast<-c("ME", "MA", "RI", "CT", "NH", "VT", "NY", "PA", "NJ", "DE", "MD")
+southeast<-c("WV", "VA", "KY", "TN", "NC", "SC", "GA", "AL", "MS", "AS", "LA", "FL")
+midwest<-c("OH", "IN", "MI", "IL", "MO", "WI", "MN", "IA", "KS", "NE", "SD", "ND")
+southwest<-c("TX", "OK", "NM", "AZ")
+west<-c("CO", "WY", "MT", "ID", "WA", "OR", "UT", "NV", "CA", "AK", "HI")
+
+region<-Vectorize(function(name){
+    if(name %in% northeast) {return("Northeast")}
+    else if (name %in% southeast) {return("Southeast")}
+    else if (name %in% midwest) {return("Midwest")}
+    else if (name %in% southwest) {return("Southwest")}
+    else {return("West")}
+})
+
+
+fdata<-data %>% mutate(APP_ACC_r = APP_ACC/APP_REC, REGION = region(STATE)) %>%
+             dplyr::select(-all_of(todrop)) %>% rename(UNIV = ...1)
+
+kable_new(fdata[1:7,])
+```
+
+## Взглянем на pairs-plot
+```{r warning=FALSE, fig.width=10, fig.height=11}
+pairs<-fdata %>% dplyr::select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)),
+                    diag=list(continuous=wrap("barDiag",binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)))))+
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+typepairs<-fdata %>% dplyr::select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(ggplot2::aes(colour=fdata$TYPE), 
+                    lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)), 
+                    diag=list(continuous=wrap("barDiag",binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)))))+
+                    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#pairs
+
+#typepairs
+```
+
+#### Признаки с результатами экзаменов сильно коррелируют, отсекаем часть из них
+```{r}
+fdata<-dplyr::select(fdata, -all_of(c("AVRVERB", "AVRCOMB")))
+```
+
+```{r}
+fdata %>% group_by(TYPE) %>% summarize(n = n())
+fdata %>% group_by(REGION) %>% summarize(n = n())
+```
+
+```{r fig.width=11}
+fdata_I<-filter(fdata, TYPE == "I")
+fdata_noIIB<-filter(fdata, TYPE != "IIB")
+
+q1<-ggplot(filter(fdata_noIIB, TYPE == "I", !is.na(SF_RATIO)), aes(sample = (SF_RATIO - mean(SF_RATIO))/sd(SF_RATIO) )) + geom_qq() + labs(title = "Normal probability plot for TYPE I 's SF_RATIO ")+geom_abline()
+q2<-ggplot(filter(fdata_noIIB, TYPE == "IIA", !is.na(SF_RATIO)), aes(sample = (SF_RATIO - mean(SF_RATIO))/sd(SF_RATIO) )) + geom_qq() + labs(title = "Normal probability plot for TYPE IIA 's SF_RATIO ")+geom_abline()
+q3<-ggplot(filter(fdata_noIIB, TYPE == "I", !is.na(GRADUAT)), aes(sample = (GRADUAT - mean(GRADUAT))/sd(GRADUAT) )) + geom_qq() + labs(title = "Normal probability plot for TYPE I 's GRADUAT ")+geom_abline()
+q4<-ggplot(filter(fdata_noIIB, TYPE == "IIA", !is.na(GRADUAT)), aes(sample = (GRADUAT - mean(GRADUAT))/sd(GRADUAT) )) + geom_qq() + labs(title = "Normal probability plot for TYPE IIA 's GRADUAT ")+geom_abline()
+
+grid.arrange(q1, q2,q3,q4, nrow = 2)
+
+shapiro.test(filter(fdata_noIIB, TYPE == "I")$SF_RATIO)
+shapiro.test(filter(fdata_noIIB, TYPE == "IIA")$SF_RATIO)
+shapiro.test(filter(fdata_noIIB, TYPE == "I")$GRADUAT)
+shapiro.test(filter(fdata_noIIB, TYPE == "IIA")$GRADUAT)
+```
+
+### Рассмотрим собственно университеты. Здесь распределение переменной TERM_D скошено вправо. Развернув значения этого признака, получаем новый признак --- NTERM_D --- число представителей преподавательского состава без высшего образования. Он уже скошен влево и разумно его логарифмировать. Скошенность R_B_COST тоже требует логарифмирования.
+```{r warning=FALSE, fig.width=10, fig.height=11}
+fdata_I_t <- mutate(fdata_I, TERM_D = log(100 - TERM_D), R_B_COST = log(R_B_COST)) %>% rename(logNTERM_D = TERM_D, logR_B_COST = R_B_COST)
+
+fdata_I_t %>% dplyr::select(-all_of(c("TYPE", "STATE", "UNIV", "REGION"))) %>% 
+            ggpairs(lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.7)), upper = list(continuous = wrap("cor", method = "pearson")),
+                    diag=list(continuous=wrap("barDiag",binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)))))+
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Будем предсказывать средний результат по математике
+### Взглянем на отфильтрованные данные
+```{r}
+kable_new(fdata_I_t[1:5,])
+summary(fdata_I_t)
+```
+
+### Немного преобразуем данные: удалим столбец с типом, разобьём их на две части: где  AVR_MATH известно и где неизвестно (можем применить потом для предскзания готовые данные), пропуски заполним средними значениями (пропусков мало, искусственно дисперсию мы не занизим)
+
+```{r}
+fdata_I_t_nT<-fdata_I_t %>% dplyr::select(-TYPE)
+tdata<-fdata_I_t_nT %>% filter(!is.na(AVRMATH))
+testdata<-fdata_I_t_nT %>% filter(is.na(AVRMATH)) %>% dplyr::select(-AVRMATH)
+
+NA2mean <- function(x) replace(x, is.na(x), mean(x, na.rm = TRUE))
+tdata<-replace(tdata, TRUE, lapply(tdata, NA2mean))
+```
+
+### Строим стандартную модель со всеми признаками
+```{r}
+model_default<-lm(AVRMATH ~ OUT_STAT + logR_B_COST + logNTERM_D + SF_RATIO + GRADUAT + SAL_AC + SAL_ALL + APP_ACC_r ,data = tdata)
+
+summary(lm.beta(model_default))
+```
+
+### Возможно, мы получим более хорошую модель, если поработаем с коррелированностью признаков
+### Взглянем на доверительный эллипс для, например, GRADUAT и SAL_ALL
+```{r}
+ellipse68<-ellipse(model_default, which = c(6, 8))
+ggplot()+geom_point(aes(x = ellipse68[,1], y = ellipse68[,2]))+
+  xlab("GRADUAT")+ylab("SAL_ALL")
+#проанализировать эллипс
+```
+
+### Построим таблицу избыточности и частных корреляций
+```{r}
+pcorrelations<-pcor(tdata[c(-1,-2,-12)])$estimate
+spcorrelations<-spcor(tdata[c(-1,-2,-12)])$estimate
+
+formula<-.~OUT_STAT + logR_B_COST + logNTERM_D + SF_RATIO + GRADUAT + SAL_AC + SAL_ALL + APP_ACC_r
+
+modelOUS<-lm(update(formula, OUT_STAT ~ .-OUT_STAT), data = tdata)
+modelRBC<-lm(update(formula, logR_B_COST ~ .-logR_B_COST), data = tdata)
+modelNTD<-lm(update(formula, logNTERM_D ~ .-logNTERM_D), data = tdata)
+modelSFR<-lm(update(formula, SF_RATIO ~ .-SF_RATIO), data = tdata)
+modelGRA<-lm(update(formula, GRADUAT ~ .-GRADUAT), data = tdata)
+modelSAC<-lm(update(formula, SAL_AC ~ .-SAL_AC), data = tdata)
+modelSAL<-lm(update(formula, SAL_ALL ~ .-SAL_ALL), data = tdata)
+modelAPC<-lm(update(formula, APP_ACC_r ~ .-APP_ACC_r), data = tdata)
+
+
+mcorOUT<-cor(tdata$OUT_STAT,    modelOUS$fitted.values)^2
+mcorRBC<-cor(tdata$logR_B_COST, modelRBC$fitted.values)^2
+mcorNTD<-cor(tdata$logNTERM_D,  modelNTD$fitted.values)^2
+mcorSFR<-cor(tdata$SF_RATIO,    modelSFR$fitted.values)^2
+mcorGRA<-cor(tdata$GRADUAT,     modelGRA$fitted.values)^2
+mcorSAC<-cor(tdata$SAL_AC,      modelSAC$fitted.values)^2
+mcorSAL<-cor(tdata$SAL_ALL,     modelSAL$fitted.values)^2
+mcorAPC<-cor(tdata$APP_ACC_r,   modelAPC$fitted.values)^2
+
+rsq<-c(mcorOUT, mcorRBC, mcorNTD, mcorSFR, mcorGRA, mcorSAC, mcorSAL, mcorAPC)
+
+info<-data.frame(tolerance = 1 - rsq,
+                Rsq        =  rsq,
+               partialcors = pcorrelations[1, 2:9],
+           semipartialcors = spcorrelations[1, 2:9], row.names = names(tdata)[4:11])
+print(info)
+```
+
+## Уберём logR_B_COST и SF_RATIO
+```{r}
+feat.nums<-c(4,6,8:11)
+
+model1<-lm(AVRMATH ~ OUT_STAT + logNTERM_D + GRADUAT + SAL_AC + SAL_ALL + APP_ACC_r ,data = tdata)
+
+summary(model1)
+```
+
+## Посмотрим на результаты перебора
+```{r}
+leaps(tdata[,c(-1,-2,-3, -12)], tdata[, 3], method = "adjr2", names = names(tdata)[4:11], nbest = 1)
+
+leaps(tdata[,c(-1,-2,-3, -12)], tdata[, 3], method = "Cp", names = names(tdata)[4:11], nbest = 1)
+```
+
+## Взглянем на пошаговую регрессию по $C_p$-критерию Mallow (эквивалентен AIC в нормальной модели)
+```{r}
+(ols_step_backward_p(model_default))
+
+(ols_step_forward_p(model_default))
+```
+
+## Проанализируем остатки новой модели. Сначала нормальность
+```{r}
+shapiro.test(model1$residuals)
+
+ggplot(tdata, aes(sample = model1$residuals))+geom_qq()+geom_qq_line()
+```
+
+## Каков график predicted-residuals
+```{r}
+ggplot(tdata ,aes(x = model1$fitted.values,y=model1$residuals))+
+  geom_point()+
+  geom_text(aes(label=ifelse(abs(model1$residuals)>50,as.character(reorder(1:dim(tdata)[1],model1$fitted.values)),'')),hjust=0,vjust=0)+
+  xlab("Predicted")+ylab("Residuals")
+```
+
+## График residuals-deleted residuals
+```{r}
+del.resid<-tdata$AVRMATH
+form1<-AVRMATH ~ OUT_STAT + logNTERM_D + GRADUAT + SAL_AC + SAL_ALL + APP_ACC_r
+for(i in 1:dim(tdata)[1])
+{
+  del.resid[i]<-del.resid[i]-predict.lm(lm(form1, data = tdata[-i,]), tdata[i,])
+}
+ggplot(tdata, aes(x = model1$residuals, y = del.resid))+
+  geom_point()+
+  geom_label_repel(aes(label=ifelse(abs(model1$residuals - del.resid)>7,as.character(reorder(1:dim(tdata)[1], model1$residuals)),'')),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+  xlab("Residuals")+ylab("Deleted residuals")+geom_abline(slope = 1, intercept = 0)
+```
+
+## График расстояний Кука
+```{r}
+gdata1<-data.frame('n' = 1:dim(tdata)[1], 'dist' = cooks.distance(model1))
+ggplot(gdata1, aes(x = n, y = dist))+geom_point()+geom_text(aes(label=ifelse(dist >0.04,as.character(n),'')),hjust=0,vjust=0)+xlab("n")+ylab("Cook's distance")
+```
+
+## График расстояний Махаланобиса
+```{r}
+gdata2<-data.frame('n' = 1:dim(tdata)[1], 'dist' = mahalanobis(tdata[feat.nums], apply(tdata[feat.nums], 2, mean) ,cov(tdata[feat.nums])))
+
+ggplot(gdata2, aes(x = n, y = dist))+geom_point()+geom_label_repel(aes(label=ifelse(dist >qchisq(0.95, 7),as.character(n),'')),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+                  xlab("n")+ylab("Mahalanobis' distance")
+
+
+ols_plot_resid_lev(model1)
+```
+
+## Кандидаты на удаление:
+```{r}
+to.delete<-c(2,30,32,46,61,68,69,76,79)
+kable_new(tdata[to.delete,])
+
+model2<-lm(form1, data = tdata[-to.delete,])
+summary(lm.beta(model2))
+```
+
+## $R_{adj}^2$ улучшился значительно
+
+## Эта же модель получается при автоматическом отборе признаков по AIC в обоих направлениях
+```{r}
+model_default_d<-model_default<-lm(AVRMATH ~ OUT_STAT + logR_B_COST + logNTERM_D + SF_RATIO + GRADUAT + SAL_AC + SAL_ALL + APP_ACC_r ,data = tdata[-to.delete,])
+
+(ols_step_forward_aic(model_default_d))
+
+(ols_step_backward_aic(model_default_d))
+```
+
+## Остатки нормальны
+```{r}
+shapiro.test(model2$residuals)
+```
+
+------------------------------------------
+## Пересмотрим модель
+## Признак GRADUAT скорее является следствием из результатов AVRMATH
+
+```{r}
+model_default_noGRADUAT<-lm(AVRMATH ~ OUT_STAT + logR_B_COST + logNTERM_D + SF_RATIO + SAL_AC + SAL_ALL + APP_ACC_r, data = tdata)
+
+summary.beta(model_default_noGRADUAT)
+```
+
+## Посмотрим на доверит. эллипсоид для зарплат
+```{r}
+ellipse67<-ellipse(model_default_noGRADUAT, which = c(6, 7))
+ggplot()+geom_point(aes(x = ellipse67[,1], y = ellipse67[,2]))+
+  xlab("SAL_AC")+ylab("SAL_ALL")
+```
+
+## Эллипс захватывает часть прямой SAL_AC == 0, поэтому его можно исключить
+```{r}
+model3<-lm(AVRMATH ~ OUT_STAT + logR_B_COST + logNTERM_D + SF_RATIO+ SAL_ALL + APP_ACC_r, data = tdata)
+summary.beta(model3)
+```
+
+## Продолжим отбор. Автоматический отбор признаком по AIC и adj. $R^2$ в отдельности дают: 
+```{r}
+(ols_step_backward_aic(model3))
+
+(ols_step_forward_aic(model3))
+```
+
+```{r}
+model4<-lm(AVRMATH ~ logNTERM_D + SAL_ALL + APP_ACC_r, data = tdata)
+summary.beta(model4)
+```
+
+## Остатки
+```{r}
+ggplot(tdata, aes(sample = model4$residuals))+geom_qq()+geom_qq_line()
+```
+
+## predicted-residuals:
+```{r}
+ggplot(tdata ,aes(x = model4$fitted.values,y=model4$residuals))+
+  geom_point()+
+  geom_text(aes(label=ifelse(abs(model4$residuals)>50,as.character(reorder(1:dim(tdata)[1],model4$fitted.values)),'')),hjust=0,vjust=0)+
+  xlab("Predicted")+ylab("Residuals")
+```
+
+## residuals-deleted residuals
+```{r}
+del.resid<-tdata$AVRMATH
+form2<-AVRMATH ~ logNTERM_D + SAL_ALL + APP_ACC_r
+for(i in 1:dim(tdata)[1])
+{
+  del.resid[i]<-del.resid[i]-predict.lm(lm(form2, data = tdata[-i,]), tdata[i,])
+}
+ggplot(tdata, aes(x = model4$residuals, y = del.resid))+
+  geom_point()+
+  geom_label_repel(aes(label=ifelse(abs(model4$residuals - del.resid)>7,as.character(reorder(1:dim(tdata)[1], model4$residuals)),'')),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+  xlab("Residuals")+ylab("Deleted residuals")+geom_abline(slope = 1, intercept = 0)
+```
+
+## Расстояния Кука
+```{r}
+gdata1<-data.frame('n' = 1:dim(tdata)[1], 'dist' = cooks.distance(model4))
+
+ggplot(gdata1, aes(x = reorder(n, dist), y = dist))+geom_point()+geom_label_repel( aes(label=ifelse(dist >0.04,as.character(n),'')),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+## Расстояния Махаланобиса
+```{r}
+feat.nums<-c(6,10,11)
+
+gdata2<-data.frame('n' = 1:dim(tdata)[1], 'dist' = mahalanobis(tdata[feat.nums], apply(tdata[feat.nums], 2, mean) ,cov(tdata[feat.nums])))
+
+ggplot(gdata2, aes(x = reorder(n, dist), y = dist))+geom_point()+geom_label_repel( aes(label=ifelse(dist >8,as.character(n),'')),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+```{r}
+ols_plot_resid_lev(model4)
+```
+
+## Имеет смысл отбросить 30, 32, 46
+```{r}
+model5<-lm(AVRMATH ~ logNTERM_D + SAL_ALL + APP_ACC_r, data = tdata[-c(30,32,46),])
+summary.beta(model5)
+```
+
+## Что-нибудь спрогнозируем. Например, для Государственного университета штата Иллинойс. По данным на 2000-2002 годы 99% поступивших сдавали экзамен ACT, а не SAT;
+
+![](./illinoissubmit.png)
+
+![](./nosat.png)
+```{r}
+predict.lm(model5, testdata[9,])
+```
+
+## Тем не менее результаты можно сопоставить
+
+![](./satact.png)
+
+
+```{r}
+
+```
